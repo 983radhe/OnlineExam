@@ -458,6 +458,18 @@ button:disabled{opacity:.6;cursor:not-allowed}
 
 <body>
 
+<div id="cameraGate" class="warning-overlay" style="display:flex;z-index:10000;">
+  <div class="warning-box">
+    <div style="font-size:42px;margin-bottom:10px">📷</div>
+    <h2 id="cameraGateTitle" style="color:#1e3a8a">Camera Permission Required</h2>
+    <p id="cameraGateText">This examination requires camera access. Please allow camera permission for this site before login.</p>
+    <button id="cameraGateBtn" type="button" onclick="requestCameraBeforeLogin()">Allow Camera</button>
+    <div id="cameraGateHelp" style="display:none;margin-top:14px;color:#92400e;font-size:13px;line-height:1.5">
+      If the browser does not show a permission popup, click the camera/lock icon near the address bar, set <b>Camera → Allow</b>, then reload this page and click <b>Try Again</b>.
+    </div>
+  </div>
+</div>
+
 <div class="container">
 
 <!-- LOGIN -->
@@ -476,8 +488,8 @@ button:disabled{opacity:.6;cursor:not-allowed}
            inputmode="numeric" autocomplete="off"
            placeholder="Enter your mobile number" required>
 
-    <button id="loginBtn" class="full-btn" type="submit">
-      Login
+    <button id="loginBtn" class="full-btn" type="submit" disabled>
+      Camera Check Required
     </button>
   </form>
 
@@ -731,11 +743,142 @@ function closeWarning() {
 }
 
 /* ======================================================
+   CAMERA GATE - REQUIRED BEFORE LOGIN
+====================================================== */
+
+let cameraPermissionReady = false;
+let cameraGateChecking = false;
+
+function setLoginCameraState(ready) {
+  cameraPermissionReady = !!ready;
+  const btn = document.getElementById("loginBtn");
+  if (!btn) return;
+
+  btn.disabled = !cameraPermissionReady;
+  btn.textContent = cameraPermissionReady ? "Login" : "Camera Check Required";
+}
+
+function closeCameraGate() {
+  const gate = document.getElementById("cameraGate");
+  if (gate) gate.style.display = "none";
+}
+
+function showCameraGateError(message) {
+  const title = document.getElementById("cameraGateTitle");
+  const text = document.getElementById("cameraGateText");
+  const help = document.getElementById("cameraGateHelp");
+  const btn = document.getElementById("cameraGateBtn");
+
+  if (title) {
+    title.textContent = "Camera Permission Required";
+    title.style.color = "#991b1b";
+  }
+  if (text) text.textContent = message;
+  if (help) help.style.display = "block";
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "Try Again";
+  }
+
+  const gate = document.getElementById("cameraGate");
+  if (gate) gate.style.display = "flex";
+  setLoginCameraState(false);
+}
+
+async function requestCameraBeforeLogin() {
+  if (cameraGateChecking) return;
+  cameraGateChecking = true;
+
+  const btn = document.getElementById("cameraGateBtn");
+  const title = document.getElementById("cameraGateTitle");
+  const text = document.getElementById("cameraGateText");
+  const help = document.getElementById("cameraGateHelp");
+
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Requesting Camera...";
+  }
+  if (title) {
+    title.textContent = "Allow Camera Access";
+    title.style.color = "#1e3a8a";
+  }
+  if (text) text.textContent = "Please click Allow when your browser asks for camera permission.";
+  if (help) help.style.display = "none";
+
+  try {
+    if (!window.isSecureContext) {
+      throw new Error("SECURE_CONTEXT");
+    }
+
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+      throw new Error("NOT_SUPPORTED");
+    }
+
+    /* Keep one live stream from the permission check onward. */
+    if (!cameraStream) {
+      cameraStream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: false
+      });
+    }
+
+    const track = cameraStream.getVideoTracks()[0];
+    if (!track || track.readyState !== "live") {
+      throw new Error("CAMERA_NOT_LIVE");
+    }
+
+    cameraPermissionReady = true;
+    setLoginCameraState(true);
+    closeCameraGate();
+    showMessage("Camera permission verified. You can now login.", "success");
+
+  } catch (error) {
+    console.error("Pre-login camera check failed:", error);
+
+    let message = "Camera permission is required. Please allow Camera for this site.";
+
+    if (error && error.message === "SECURE_CONTEXT") {
+      message = "Camera requires HTTPS. Open the deployed Google Apps Script Web App URL, not a local/file URL.";
+    } else if (error && error.message === "NOT_SUPPORTED") {
+      message = "This browser/context does not support camera access. Please use the deployed site in Chrome or Edge.";
+    } else if (error && error.name === "NotFoundError") {
+      message = "No camera was found. Connect/enable a camera and try again.";
+    } else if (error && error.name === "NotReadableError") {
+      message = "The camera is busy in another application. Close Zoom, Teams, Meet, Camera app, etc., then try again.";
+    } else if (error && error.name === "NotAllowedError") {
+      message = "Camera permission was denied or blocked. Allow Camera for this site in the browser/site permissions, then click Try Again.";
+    }
+
+    showCameraGateError(message);
+  } finally {
+    cameraGateChecking = false;
+  }
+}
+
+async function runInitialCameraCheck() {
+  /* Login is impossible until the camera permission check succeeds. */
+  setLoginCameraState(false);
+  const gate = document.getElementById("cameraGate");
+  if (gate) gate.style.display = "flex";
+
+  await requestCameraBeforeLogin();
+}
+
+window.addEventListener("DOMContentLoaded", function() {
+  runInitialCameraCheck();
+});
+
+/* ======================================================
    LOGIN
 ====================================================== */
 
 document.getElementById("loginForm").addEventListener("submit", function(e) {
   e.preventDefault();
+
+  if (!cameraPermissionReady || !cameraStream || !cameraStream.getVideoTracks().some(function(t){ return t.readyState === "live"; })) {
+    showCameraGateError("Camera permission is required before login. Please allow the camera for this site and try again.");
+    return;
+  }
 
   const rollNo = document.getElementById("rollNo").value.trim();
   const mobile = document.getElementById("mobile").value.trim();
@@ -928,54 +1071,107 @@ function showExamStartScreen() {
 
 }
 
-function enableCameraBeforeExam() {
+async function enableCameraBeforeExam() {
+  const status = document.getElementById("prestartCameraStatus");
+  const enableBtn = document.getElementById("enableCameraBtn");
+  const captureBtn = document.getElementById("prestartCaptureBtn");
+  const startBtn = document.getElementById("beginExamBtn");
+  const video = document.getElementById("prestartCameraVideo");
+
   if (cameraStream) {
-    const status = document.getElementById("prestartCameraStatus");
-    if (status) status.textContent = "Camera: Active";
-    const captureBtn = document.getElementById("prestartCaptureBtn");
+    if (status) status.textContent = "Camera: Active — please capture your photo";
     if (captureBtn) captureBtn.disabled = false;
-    const startBtn = document.getElementById("beginExamBtn");
     if (startBtn) startBtn.disabled = !cameraPreStartCaptureDone;
     return;
   }
 
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    const status = document.getElementById("prestartCameraStatus");
-    if (status) status.textContent = "Camera: Not available in this browser/context";
+  if (!window.isSecureContext) {
+    if (status) status.textContent = "Camera: Secure connection required (HTTPS)";
+    alert("Camera requires a secure HTTPS connection. Please open the deployed Web App URL.");
+    return;
+  }
+
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+    if (status) status.textContent = "Camera: Not supported or blocked by this browser";
+    alert("Camera access is not available in this browser/context. Please use the deployed HTTPS Web App in Chrome.");
     logSecurity("Camera API unavailable before exam", 1, "Blocked");
     return;
   }
 
-  const status = document.getElementById("prestartCameraStatus");
-  const enableBtn = document.getElementById("enableCameraBtn");
-  if (status) status.textContent = "Camera: Requesting Permission...";
-  if (enableBtn) { enableBtn.disabled = true; enableBtn.textContent = "Requesting Camera..."; }
+  if (enableBtn) {
+    enableBtn.disabled = true;
+    enableBtn.textContent = "Requesting Camera...";
+  }
+  if (status) status.textContent = "Camera: Requesting permission...";
 
-  navigator.mediaDevices.getUserMedia({
-    video: { facingMode: "user" },
-    audio: false
-  }).then(function(stream) {
+  try {
+    /*
+     * IMPORTANT:
+     * Keep this getUserMedia call directly inside the student's button action.
+     * This is the same successful pattern used by the reference camera app.
+     */
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: false
+    });
+
     cameraStream = stream;
-    const examCameraStatus = document.getElementById("cameraStatus");
-    if (examCameraStatus) examCameraStatus.textContent = "Camera: Active";
 
-    const video = document.getElementById("prestartCameraVideo");
     if (video) {
-      video.srcObject = stream;
-      video.onloadedmetadata = function() { video.play().catch(function(){}); };
+      video.srcObject = cameraStream;
+      video.muted = true;
+      video.setAttribute("playsinline", "true");
+
+      try {
+        await video.play();
+      } catch (playError) {
+        console.warn("Video autoplay/play warning:", playError);
+      }
     }
 
-    if (status) status.textContent = "Camera: Active — please capture your photo";
-    const captureBtn = document.getElementById("prestartCaptureBtn");
+    if (status) status.textContent = "Camera: Active ✓ — please capture your photo";
     if (captureBtn) captureBtn.disabled = false;
-    if (enableBtn) { enableBtn.textContent = "✓ Camera Enabled"; enableBtn.disabled = true; }
+    if (startBtn) startBtn.disabled = !cameraPreStartCaptureDone;
+    if (enableBtn) {
+      enableBtn.disabled = true;
+      enableBtn.textContent = "✓ Camera Enabled";
+    }
 
-  }).catch(function(error) {
+  } catch (error) {
     console.error("Camera permission error:", error);
-    if (status) status.textContent = "Camera: Permission Denied / Blocked";
-    if (enableBtn) { enableBtn.disabled = false; enableBtn.textContent = "📷 Try Camera Again"; }
-    logSecurity("Camera permission unavailable before exam", 1, "Logged");
-  });
+
+    let message = "Camera could not be started.";
+
+    switch (error && error.name) {
+      case "NotAllowedError":
+        message = "Camera permission was denied or blocked. Allow Camera for this site and try again.";
+        break;
+      case "NotFoundError":
+        message = "No camera was found on this device.";
+        break;
+      case "NotReadableError":
+        message = "The camera is busy or being used by another application.";
+        break;
+      case "SecurityError":
+        message = "Browser security blocked camera access.";
+        break;
+      case "AbortError":
+        message = "Camera startup was interrupted. Please try again.";
+        break;
+      case "OverconstrainedError":
+        message = "The requested camera settings are not available.";
+        break;
+    }
+
+    if (status) status.textContent = "Camera: " + message;
+    if (enableBtn) {
+      enableBtn.disabled = false;
+      enableBtn.textContent = "📷 Try Camera Again";
+    }
+
+    showVerificationMessage(message, "error");
+    logSecurity("Camera permission unavailable before exam: " + (error && error.name ? error.name : "UnknownError"), 1, "Logged");
+  }
 }
 
 function capturePreStartPhoto() {
@@ -1757,6 +1953,16 @@ function logout() {
 
   document.getElementById("message").className = "message";
   document.getElementById("verificationMessage").className = "message";
+
+  /* Keep camera permission required for the next login as well. */
+  if (cameraStream && cameraStream.getVideoTracks().some(function(t){ return t.readyState === "live"; })) {
+    cameraPermissionReady = true;
+    setLoginCameraState(true);
+    closeCameraGate();
+  } else {
+    setLoginCameraState(false);
+    runInitialCameraCheck();
+  }
 
   try {
     if (document.fullscreenElement) {
