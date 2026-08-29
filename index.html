@@ -687,6 +687,193 @@ button:disabled{opacity:.6;cursor:not-allowed}
 
 <script>
 "use strict";
+  /* ======================================================
+   GITHUB → GOOGLE APPS SCRIPT BRIDGE
+====================================================== */
+
+window.google = window.google || {};
+window.google.script = window.google.script || {};
+
+(function () {
+
+  const API_URL =
+    "https://script.google.com/macros/s/AKfycbyf5jhDZ8Hgk5NK9IiUay1aSrDPPcQb70jqLLcSklu9mnYhfB9DU5_okgPmj7xdMFPf_g/exec";
+
+  let requestCounter = 0;
+
+  const successHandlers = {};
+  const failureHandlers = {};
+
+  window.addEventListener("message", function (event) {
+
+    const data = event.data;
+
+    if (!data || data.type !== "VOE_API_RESPONSE") {
+      return;
+    }
+
+    const id = data.requestId;
+
+    if (successHandlers[id]) {
+      successHandlers[id](data.result);
+      delete successHandlers[id];
+      delete failureHandlers[id];
+    }
+
+  });
+
+  function Runner() {
+    this.successHandler = null;
+    this.failureHandler = null;
+  }
+
+  Runner.prototype.withSuccessHandler = function (fn) {
+    this.successHandler = fn;
+    return this;
+  };
+
+  Runner.prototype.withFailureHandler = function (fn) {
+    this.failureHandler = fn;
+    return this;
+  };
+
+  function callServer(functionName, args, success, failure) {
+
+    const id =
+      "VOE_" +
+      Date.now() +
+      "_" +
+      (++requestCounter);
+
+    successHandlers[id] =
+      success || function () {};
+
+    failureHandlers[id] =
+      failure || function () {};
+
+    const iframe =
+      document.createElement("iframe");
+
+    iframe.name = id;
+    iframe.style.display = "none";
+
+    document.body.appendChild(iframe);
+
+    const form =
+      document.createElement("form");
+
+    form.method = "POST";
+    form.action = API_URL;
+    form.target = id;
+    form.style.display = "none";
+
+    const actionInput =
+      document.createElement("input");
+
+    actionInput.type = "hidden";
+    actionInput.name = "action";
+    actionInput.value = functionName;
+
+    const argsInput =
+      document.createElement("input");
+
+    argsInput.type = "hidden";
+    argsInput.name = "args";
+    argsInput.value = JSON.stringify(args);
+
+    const idInput =
+      document.createElement("input");
+
+    idInput.type = "hidden";
+    idInput.name = "requestId";
+    idInput.value = id;
+
+    form.appendChild(actionInput);
+    form.appendChild(argsInput);
+    form.appendChild(idInput);
+
+    document.body.appendChild(form);
+
+    form.submit();
+
+    setTimeout(function () {
+
+      try {
+        form.remove();
+        iframe.remove();
+      } catch (e) {}
+
+      if (successHandlers[id]) {
+        const fail =
+          failureHandlers[id];
+
+        delete successHandlers[id];
+        delete failureHandlers[id];
+
+        if (fail) {
+          fail({
+            message:
+              "Server request timed out."
+          });
+        }
+      }
+
+    }, 60000);
+  }
+
+  window.google.script.run =
+    new Proxy(new Runner(), {
+
+      get: function (target, property) {
+
+        if (
+          property === "withSuccessHandler" ||
+          property === "withFailureHandler"
+        ) {
+          return function (fn) {
+
+            if (
+              property === "withSuccessHandler"
+            ) {
+              target.successHandler = fn;
+            } else {
+              target.failureHandler = fn;
+            }
+
+            return proxy;
+          };
+        }
+
+        return function () {
+
+          const args =
+            Array.prototype.slice.call(arguments);
+
+          const success =
+            target.successHandler;
+
+          const failure =
+            target.failureHandler;
+
+          target.successHandler = null;
+          target.failureHandler = null;
+
+          callServer(
+            property,
+            args,
+            success,
+            failure
+          );
+
+          return proxy;
+        };
+      }
+    });
+
+  const proxy =
+    window.google.script.run;
+
+})();
 
 /* ======================================================
    GLOBAL STATE
